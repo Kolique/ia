@@ -2,6 +2,7 @@ import streamlit as st
 import requests
 import json
 import os
+import firebase_admin
 from firebase_admin import credentials, firestore, initialize_app
 
 # --- Configuration Firebase (IMPORTANT : À configurer par l'utilisateur) ---
@@ -17,9 +18,19 @@ from firebase_admin import credentials, firestore, initialize_app
 # Si vous utilisez Streamlit Cloud, vous pouvez stocker le contenu du JSON dans st.secrets.
 FIREBASE_CREDENTIALS_PATH = 'votre_cle_firebase.json' # <-- MODIFIEZ CECI
 
-# Initialisation de Firebase
-try:
-    if not firebase_admin._apps:
+# --- Configuration de l'API Gemini (IMPORTANT : À configurer par l'utilisateur) ---
+# Obtenez votre clé API Gemini depuis Google AI Studio ou Google Cloud Console.
+# Pour une meilleure sécurité, stockez-la dans les secrets de Streamlit (st.secrets) ou comme variable d'environnement.
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "VOTRE_CLE_API_GEMINI_ICI") # <-- MODIFIEZ CECI OU DÉFINISSEZ LA VARIABLE D'ENVIRONNEMENT
+GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent"
+
+# --- Initialisation de Firebase (Gérée pour s'exécuter une seule fois) ---
+# Utilise st.session_state pour s'assurer que Firebase n'est initialisé qu'une seule fois par session.
+if 'firebase_initialized' not in st.session_state:
+    st.session_state.firebase_initialized = False
+
+if not st.session_state.firebase_initialized:
+    try:
         # Vérifie si le fichier de clé existe
         if os.path.exists(FIREBASE_CREDENTIALS_PATH):
             cred = credentials.Certificate(FIREBASE_CREDENTIALS_PATH)
@@ -29,20 +40,19 @@ try:
         else:
             st.error(f"Erreur : Le fichier de clé Firebase '{FIREBASE_CREDENTIALS_PATH}' est introuvable. "
                      "Veuillez le télécharger et le placer dans le même dossier que ce script, ou vérifier le chemin.")
+            # Ne pas initialiser si le fichier n'est pas là
             st.session_state.firebase_initialized = False
-    else:
-        st.session_state.firebase_initialized = True
-except Exception as e:
-    st.error(f"Erreur lors de l'initialisation de Firebase : {e}")
-    st.session_state.firebase_initialized = False
+    except Exception as e:
+        st.error(f"Erreur lors de l'initialisation de Firebase : {e}")
+        st.session_state.firebase_initialized = False
 
-db = firestore.client()
+# Initialise le client Firestore seulement si Firebase a été initialisé avec succès
+db = None
+if st.session_state.firebase_initialized:
+    db = firestore.client()
+else:
+    st.warning("Firestore n'est pas disponible car Firebase n'a pas pu être initialisé.")
 
-# --- Configuration de l'API Gemini (IMPORTANT : À configurer par l'utilisateur) ---
-# Obtenez votre clé API Gemini depuis Google AI Studio ou Google Cloud Console.
-# Pour une meilleure sécurité, stockez-la dans les secrets de Streamlit (st.secrets) ou comme variable d'environnement.
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "AIzaSyBRgL_PUP2KAiWPDmw1ebDxs1hAh3xkzrE") # <-- MODIFIEZ CECI OU DÉFINISSEZ LA VARIABLE D'ENVIRONNEMENT
-GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent"
 
 # --- Variables de session Streamlit ---
 if 'processed_documents' not in st.session_state:
@@ -51,6 +61,8 @@ if 'user_id' not in st.session_state:
     # Pour cette démo, nous utilisons un ID utilisateur simple.
     # En production, vous utiliseriez un système d'authentification réel.
     st.session_state.user_id = "utilisateur_unique_demo" # Vous pouvez le changer ou le générer dynamiquement
+if 'ai_response' not in st.session_state:
+    st.session_state.ai_response = "La réponse de l'IA apparaîtra ici."
 
 # --- Fonctions de stockage Firestore ---
 def get_user_documents_ref(user_id):
@@ -61,8 +73,8 @@ def get_user_documents_ref(user_id):
 
 def load_documents_from_firestore():
     """Charge les documents de l'utilisateur depuis Firestore."""
-    if not st.session_state.get('firebase_initialized'):
-        st.warning("Firebase non initialisé. Impossible de charger les documents.")
+    if not st.session_state.get('firebase_initialized') or db is None:
+        st.warning("Firebase non initialisé ou client Firestore non disponible. Impossible de charger les documents.")
         return
 
     doc_ref = get_user_documents_ref(st.session_state.user_id)
@@ -84,8 +96,8 @@ def load_documents_from_firestore():
 
 def save_documents_to_firestore():
     """Sauvegarde les documents de l'utilisateur dans Firestore."""
-    if not st.session_state.get('firebase_initialized'):
-        st.warning("Firebase non initialisé. Impossible de sauvegarder les documents.")
+    if not st.session_state.get('firebase_initialized') or db is None:
+        st.warning("Firebase non initialisé ou client Firestore non disponible. Impossible de sauvegarder les documents.")
         return
 
     doc_ref = get_user_documents_ref(st.session_state.user_id)
@@ -256,10 +268,7 @@ Réponse:"""
 
 # --- Section 3: Réponse de l'IA ---
 st.header("3. Réponse de l'IA")
-if 'ai_response' in st.session_state and st.session_state.ai_response:
-    st.markdown(st.session_state.ai_response)
-else:
-    st.info("La réponse de l'IA apparaîtra ici.")
+st.markdown(st.session_state.ai_response) # Utilise st.session_state.ai_response pour afficher la réponse
 
 # Charger les documents au démarrage de l'application Streamlit
 # (Cette fonction est appelée une fois par session)
